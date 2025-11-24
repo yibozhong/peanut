@@ -1,10 +1,10 @@
- <div align="center">
-<h1>Neat 🧼</h1>
-<h3>Nonlinear Parameter-efficient Adaptation of Pre-trained Models</h3>
+<div align="center">
+<h1>PEANuT 🥜</h1>
+<h3>Parameter-Efficient Adaptation with Weight-aware Neural Tweakers</h3>
 </div>
 
 ![method](framework.png)
 
-**TL;DR**: NEAT is a novel PEFT method that uses a lightweight neural network to directly model cumulative weight updates for adaptation targets and capture intricate and non-coherent structures.
+**TL;DR**: PEANuT is a novel PEFT framework that introduces weight-aware neural tweakers, compact neural modules that generate task-adaptive updates conditioned on frozen pre-trained weights, providing a flexible yet efficient way to capture complex update patterns without full model tuning.
 
 **The experiment setups are located in each subfolder.**

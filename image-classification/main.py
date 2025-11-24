@@ -1,4 +1,4 @@
-from neat import *
+from peanut import *
 import os
 import wandb
 import torchvision.datasets as datasets
@@ -109,7 +109,7 @@ def main(args_out,
     data_local_dir: str = None,
     mhsa_dim: int = 16,
     ffn_dim: int = 16,
-    neat_mode: int = 1,
+    peanut_mode: int = 1,
     multilayer=False,
     depth=2,
     head_lr=5e-3,
@@ -195,11 +195,11 @@ def main(args_out,
         )
         print_trainable_parameters(model)
 
-        if mode == "neat":
+        if mode == "peanut":
             if not multilayer:
-                set_neat_vanilla(model, neat_mode, mhsa_dim, ffn_dim)
+                set_peanut_vanilla(model, peanut_mode, mhsa_dim, ffn_dim)
             else:
-                set_neat_multilayers(model, neat_mode, mhsa_dim, ffn_dim, depth=depth)
+                set_peanut_multilayers(model, peanut_mode, mhsa_dim, ffn_dim, depth=depth)
             for n, p in model.named_parameters():
                 if 'adapter' in n:
                     print(n)
@@ -240,8 +240,8 @@ def main(args_out,
 
     model_name = model_name_or_path.split("/")[-1]
     
-    if mode == "neat":
-        save_id = f'{model_name}-{mode}-{dataset_name}-neatmode{neat_mode}-mhsa_dim-{mhsa_dim}-mlp_dim-{ffn_dim}-head_lr-{head_lr}-backbone_lr-{backbone_lr}-multilayer-{multilayer}'
+    if mode == "peanut":
+        save_id = f'{model_name}-{mode}-{dataset_name}-peanutmode-{peanut_mode}-mhsa_dim-{mhsa_dim}-mlp_dim-{ffn_dim}-head_lr-{head_lr}-backbone_lr-{backbone_lr}-multilayer-{multilayer}'
     elif mode == "fourier":
         save_id = f'{model_name}-{mode}-f{n_frequency}-{dataset_name}-f{10000}'
     elif mode == "lora":
@@ -295,7 +295,7 @@ def main(args_out,
             args = TrainingArguments(
                 os.path.join(results_dir, save_id, f"testrun-{seed}"),
                 remove_unused_columns=False,
-                evaluation_strategy="epoch",
+                eval_strategy="epoch",
                 save_strategy="no",
                 per_device_train_batch_size=batch_size,
                 gradient_accumulation_steps=4,
@@ -381,7 +381,7 @@ if __name__ == "__main__":
         data_local_dir=args.data_local_dir,
         mhsa_dim=args.mhsa_dim,
         ffn_dim=args.ffn_dim,
-        neat_mode=args.neat_mode,
+        peanut_mode=args.peanut_mode,
         multilayer=args.multilayer,
         depth=args.depth,
         head_lr=args.head_lr,

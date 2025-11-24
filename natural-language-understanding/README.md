@@ -3,21 +3,21 @@
 ## Environment setup
 
 ```bash
-conda create -n neat-nlu python=3.12
-conda activate neat-nlu
+conda create -n peanut-nlu python=3.12
+conda activate peanut-nlu
 pip install -r requirements.txt
 ```
 
 ## Fine-tune
 
-Use the scripts to finetune with neat:
+Use the scripts to finetune with peanut:
 
 ```bash
-bash neat-l.sh
-bash neat-s.sh
+bash peanut-l.sh
+bash peanut-s.sh
 ```
 
-The scripts already have the best configuration from our experiments. However, the hyperparameters can still be flexibly modified. The `neat-l.sh` script corresponds to settings for Neat-L, while `neat-s.sh` corresponds to settings for Neat-S in our experiments.
+The scripts already have the best configuration from our experiments. However, the hyperparameters can still be flexibly modified. The `peanut-l.sh` script corresponds to settings for PEANuT-L, while `peanut-s.sh` corresponds to settings for PEANuT-S in our experiments.
 
 ## Acknowledgments
 

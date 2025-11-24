@@ -22,7 +22,7 @@ parser.add_argument("--monoscale", action= "store_true")
 parser.add_argument("--set_bias", action= "store_true")
 parser.add_argument("--seed", type=int, default=00000)
 parser.add_argument("--entry_seed", type=int, default=2024)
-parser.add_argument("--small", action= "store_true") # use small version of neat
+parser.add_argument("--small", action= "store_true") # use small version of peanut
 args = parser.parse_args()
 
 def get_args():

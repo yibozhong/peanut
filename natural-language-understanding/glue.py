@@ -16,10 +16,10 @@ from peft import (
     PrefixTuningConfig,
     PromptEncoderConfig,
 )
-from datasets import load_dataset, load_metric
+from datasets import load_dataset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, get_linear_schedule_with_warmup, set_seed
 from tqdm import tqdm
-import neat
+import peanut
 from utils import *
 
 args = get_args()
@@ -27,7 +27,8 @@ print(args)
 
 torch.manual_seed(args.seed)
 task = args.task
-device = "cuda"
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print("Using device:", device)
 num_labels = 2
 if task == "stsb":
     num_labels = 1
@@ -113,12 +114,12 @@ eval_dataloader = DataLoader(
 
 model = AutoModelForSequenceClassification.from_pretrained(args.model_name_or_path,num_labels=num_labels,return_dict=True)
 
-# Set neat
+# Set PEANuT
 
 if args.small:
-    neat.set_neat_s(model, args.scale)
+    peanut.set_peanut_s(model, args.scale)
 else:
-    neat.set_neat_l(model, args.dim, args.scale)
+    peanut.set_peanut_l(model, args.dim, args.scale)
 
 set_trainbale_parameters(model)
 
