@@ -41,13 +41,12 @@ def main(
             top_p=0.75,
             top_k=40,
             num_beams=4,
-            max_new_tokens=1024,
+            max_new_tokens=256,
             **kwargs,
     ):
         prompt = generate_prompt(instruction, input)
         inputs = tokenizer(prompt, return_tensors="pt")
         input_ids = inputs["input_ids"].to(device)
-        attention_mask = inputs["attention_mask"].to(device)
         generation_config = GenerationConfig(
             temperature=temperature,
             top_p=top_p,
@@ -58,13 +57,11 @@ def main(
         with torch.no_grad():
             generation_output = model.generate(
                 input_ids=input_ids,
-                attention_mask=attention_mask,
                 generation_config=generation_config,
                 return_dict_in_generate=True,
                 output_scores=True,
                 max_new_tokens=max_new_tokens,
                 use_cache=False,
-                pad_token_id=tokenizer.eos_token_id,
             )
         s = generation_output.sequences[0]
         output = tokenizer.decode(s)
@@ -87,13 +84,14 @@ def main(
         print("Response:", evaluate(instruction))
         print()
     """
-    save_file = f'experiment/{args.model}-{"NEAT"}-{args.dataset}.json'
+    save_file = f'experiment/{args.model}-{args.adapter}-{args.dataset}.json'
     create_dir('experiment/')
 
     dataset = load_data(args)
     tokenizer, model = load_model(args)
     total = len(dataset)
     correct = 0
+    miss = 0.001
     output_data = []
     pbar = tqdm(total=total)
     for idx, data in enumerate(dataset):
@@ -104,13 +102,16 @@ def main(
         flag = False
         if args.dataset.lower() in ['aqua']:
             predict = extract_answer_letter(args, outputs)
-            if str(label) == str(predict):
+            if label == predict:
                 correct += 1
                 flag = True
         else:
             if isinstance(label, str):
-                label = str(label)
+                label = float(label)
             predict = extract_answer_number(args, outputs)
+            if abs(label - predict) <= miss:
+                correct += 1
+                flag = True
         new_data = copy.deepcopy(data)
         new_data['output_pred'] = outputs
         new_data['pred'] = predict
@@ -177,9 +178,9 @@ def load_data(args) -> list:
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', choices=['gsm8k', 'MATH'],
+    parser.add_argument('--dataset', choices=['AddSub', 'MultiArith', 'SingleEq', 'gsm8k', 'AQuA', 'SVAMP'],
                         required=True)
-    parser.add_argument('--model', choices=['LLaMA2-7B', 'LLaMA3-8B'], required=True)
+    parser.add_argument('--model', choices=['LLaMA-7B', 'BLOOM-7B', 'GPT-j-6B'], required=True)
     parser.add_argument('--adapter', choices=['LoRA', 'AdapterP', 'AdapterH', 'Parallel', 'Prefix'],
                         required=True)
     parser.add_argument('--base_model', required=True)
@@ -206,12 +207,10 @@ def load_model(args) -> tuple:
         raise ValueError(f'can not find lora weight, the value is: {lora_weights}')
 
     load_8bit = args.load_8bit
-
-    if args.model == 'LLaMA2-7B':
+    if args.model == 'LLaMA-7B':
         tokenizer = LlamaTokenizer.from_pretrained(base_model)
     else:
         tokenizer = AutoTokenizer.from_pretrained(base_model)
-
     if device == "cuda":
         model = AutoModelForCausalLM.from_pretrained(
             base_model,
@@ -270,21 +269,21 @@ def load_instruction(args) -> str:
     return instruction
 
 
-def extract_answer_number(args, sentence: str) -> str:
+def extract_answer_number(args, sentence: str) -> float:
     dataset = args.dataset.lower()
-    if dataset in ["gsm8k", "math"]:
+    if dataset in ["multiarith", "addsub", "singleeq", "gsm8k", "svamp"]:
         sentence = sentence.replace(',', '')
         pred = [s for s in re.findall(r'-?\d+\.?\d*', sentence)]
         if not pred:
-            return str('inf')
-        pred_answer = str(pred[-1])
+            return float('inf')
+        pred_answer = float(pred[-1])
     else:
         raise NotImplementedError(' not support dataset: {}'.format(dataset))
     if isinstance(pred_answer, str):
         try:
-            pred_answer = str(pred_answer)
+            pred_answer = float(pred_answer)
         except ValueError as e:
-            pred_answer = str('inf')
+            pred_answer = float('inf')
     return pred_answer
 
 

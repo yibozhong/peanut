@@ -37,21 +37,21 @@ if is_bnb_available():
 
 
 @dataclass
-class LoraConfig(PeftConfig):
+class PeanutConfig(PeftConfig):
     """
-    This is the configuration class to store the configuration of a [`~peft.Lora`].
+    This is the configuration class to store the configuration of a [`~peft.Peanut`].
 
     Args:
-        r (`int`): Lora attention dimension
-        target_modules (`Union[List[str],str]`): The names of the modules to apply Lora to.
-        lora_alpha (`float`): The alpha parameter for Lora scaling.
-        lora_dropout (`float`): The dropout probability for Lora layers.
+        r (`int`): Peanut attention dimension
+        target_modules (`Union[List[str],str]`): The names of the modules to apply Peanut to.
+        lora_alpha (`float`): The alpha parameter for Peanut scaling.
+        lora_dropout (`float`): The dropout probability for Peanut layers.
         merge_weights (`bool`):
-            Whether to merge the weights of the Lora layers with the base transformer model in `eval` mode.
+            Whether to merge the weights of the Peanut layers with the base transformer model in `eval` mode.
         fan_in_fan_out (`bool`): Set this to True if the layer to replace stores weight like (fan_in, fan_out)
         enable_lora ( `List[bool]`): Used with `lora.MergedLinear`.
         bias (`str`): Bias type for Lora. Can be 'none', 'all' or 'lora_only'
-        modules_to_save (`List[str]`):List of modules apart from LoRA layers to be set as trainable
+        modules_to_save (`List[str]`):List of modules apart from Peanut layers to be set as trainable
             and saved in the final checkpoint.
     """
 
@@ -300,11 +300,13 @@ class Linear(nn.Linear, LoraLayer):
         nn.Linear.__init__(self, in_features, out_features, **kwargs)
         LoraLayer.__init__(self, r=r, lora_alpha=lora_alpha, lora_dropout=lora_dropout, merge_weights=merge_weights)
 
+        self.non_linear = nn.ReLU()
+        self._cached_delta = None
         self.fan_in_fan_out = fan_in_fan_out
         # Actual trainable parameters
         if r > 0:
             self.lora_A = nn.Linear(in_features, r, bias=False)
-            self.lora_B = nn.Linear(r, out_features, bias=False)
+            self.lora_B = nn.Linear(r, in_features, bias=False)
             self.scaling = self.lora_alpha / self.r
             # Freezing the pre-trained weight matrix
             self.weight.requires_grad = False
@@ -319,23 +321,33 @@ class Linear(nn.Linear, LoraLayer):
             nn.init.kaiming_uniform_(self.lora_A.weight, a=math.sqrt(5))
             nn.init.zeros_(self.lora_B.weight)
 
+    def _compute_delta_W(self):
+        W0 = transpose(self.weight, self.fan_in_fan_out)
+        Theta1 = self.lora_A.weight.T
+        Theta2 = self.lora_B.weight.T
+        delta_W = self.non_linear(W0 @ Theta1) @ Theta2
+        scale = (self.lora_alpha / self.r) if self.r > 0 else 0.0
+        return delta_W * scale
+
     def train(self, mode: bool = True):
         nn.Linear.train(self, mode)
         self.lora_A.train(mode)
         self.lora_B.train(mode)
+
         if not mode and self.merge_weights and not self.merged:
-            # Merge the weights and mark it
             if self.r > 0:
-                self.weight.data += (
-                    transpose(self.lora_B.weight @ self.lora_A.weight, self.fan_in_fan_out) * self.scaling
-                )
+                delta = self._compute_delta_W().to(self.weight.dtype)
+                self.weight.data += transpose(delta, self.fan_in_fan_out)
+                self._cached_delta = delta.detach()
             self.merged = True
+
         elif self.merge_weights and self.merged:
-            # Make sure that the weights are not merged
             if self.r > 0:
-                self.weight.data -= (
-                    transpose(self.lora_B.weight @ self.lora_A.weight, self.fan_in_fan_out) * self.scaling
-                )
+                delta = self._cached_delta
+                if delta is None:
+                    delta = self._compute_delta_W().to(self.weight.dtype)
+                self.weight.data -= transpose(delta, self.fan_in_fan_out)
+                self._cached_delta = None
             self.merged = False
 
     def eval(self):
@@ -348,15 +360,19 @@ class Linear(nn.Linear, LoraLayer):
 
         if self.disable_adapters:
             if self.r > 0 and self.merged:
-                matmul_output = self.lora_B.weight @ self.lora_A.weight
-                self.weight.data -= transpose(matmul_output.to(previous_dtype), self.fan_in_fan_out) * self.scaling
+                delta = self._cached_delta
+                if delta is None:
+                    delta = self._compute_delta_W().to(previous_dtype)
+                self.weight.data -= transpose(delta, self.fan_in_fan_out)
                 self.merged = False
+                self._cached_delta = None
 
             result = F.linear(x, transpose(self.weight, self.fan_in_fan_out), bias=self.bias)
         elif self.r > 0 and not self.merged:
             result = F.linear(x, transpose(self.weight, self.fan_in_fan_out), bias=self.bias)
             if self.r > 0:
-                result += self.lora_B(self.lora_A(self.lora_dropout(x.to(self.lora_A.weight.dtype)))) * self.scaling
+                delta_W = self._compute_delta_W()
+                result = result + x @ delta_W.T
         else:
              result = F.linear(x, transpose(self.weight, self.fan_in_fan_out), bias=self.bias)
 

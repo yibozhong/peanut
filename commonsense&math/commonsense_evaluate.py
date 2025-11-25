@@ -29,7 +29,7 @@ except:  # noqa: E722
 def main(
         load_8bit: bool = False,
         base_model: str = "",
-        lora_weights: str = "",
+        lora_weights: str = "tloen/alpaca-lora-7b",
         share_gradio: bool = False,
 ):
     args = parse_args()
@@ -47,7 +47,6 @@ def main(
         prompts = [generate_prompt(instruction, input) for instruction in instructions]
         inputs = tokenizer(prompts, return_tensors="pt", padding=True)
         input_ids = inputs["input_ids"].to(device)
-        attention_mask = inputs["attention_mask"].to(device)
         generation_config = GenerationConfig(
             temperature=temperature,
             top_p=top_p,
@@ -58,12 +57,10 @@ def main(
         with torch.no_grad():
             generation_output = model.generate(
                 input_ids=input_ids,
-                attention_mask=attention_mask,
                 generation_config=generation_config,
                 return_dict_in_generate=True,
                 output_scores=True,
                 max_new_tokens=max_new_tokens,
-                pad_token_id=tokenizer.eos_token_id,
             )
         s = generation_output.sequences
         outputs = tokenizer.batch_decode(s, skip_special_tokens=True)
@@ -71,7 +68,7 @@ def main(
         print(outputs)
         return outputs
 
-    save_file = f'experiment/{args.model}-{"NEAT"}-{args.dataset}.json'
+    save_file = f'experiment/{args.model}-{args.adapter}-{args.dataset}.json'
     create_dir('experiment/')
 
     dataset = load_data(args)
@@ -171,7 +168,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', choices=["boolq", "piqa", "social_i_qa", "hellaswag", "winogrande", "ARC-Challenge", "ARC-Easy", "openbookqa"],
                         required=True)
-    parser.add_argument('--model', choices=['LLaMA2-7B', 'LLaMA3-8B'], required=True)
+    parser.add_argument('--model', choices=['LLaMA-7B', "LLaMA-13B",'BLOOM-7B', 'GPT-j-6B'], required=True)
     parser.add_argument('--adapter', choices=['LoRA', 'AdapterP', 'AdapterH', 'Parallel'],
                         required=True)
     parser.add_argument('--base_model', required=True)
@@ -200,8 +197,7 @@ def load_model(args) -> tuple:
 
     load_8bit = args.load_8bit
     if "LLaMA" in args.model:
-        # tokenizer = LlamaTokenizer.from_pretrained(base_model)
-        tokenizer = AutoTokenizer.from_pretrained(base_model)
+        tokenizer = LlamaTokenizer.from_pretrained(base_model)
     else:
         tokenizer = AutoTokenizer.from_pretrained(base_model)
     tokenizer.padding_side = "left"

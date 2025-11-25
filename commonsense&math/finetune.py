@@ -8,9 +8,15 @@ import transformers
 from datasets import load_dataset
 from typing import List, Optional, Union
 
+"""
+Unused imports:
+import torch.nn as nn
+import bitsandbytes as bnb
+"""
 sys.path.append(os.path.join(os.getcwd(), "peft/src/"))
-from peft import (
+from peft import (  # noqa: E402
     LoraConfig,
+    PeanutConfig,
     BottleneckConfig,
     PrefixTuningConfig,
     get_peft_model,
@@ -18,15 +24,15 @@ from peft import (
     prepare_model_for_int8_training,
     set_peft_model_state_dict,
 )
-from transformers import AutoModelForCausalLM, AutoTokenizer, LlamaTokenizer, AutoModel
+from transformers import AutoModelForCausalLM, AutoTokenizer, LlamaTokenizer, AutoModel  # noqa: F402
 
 
 def train(
         # model/data params
-        base_model: str = "",
-        data_path: str = "",
-        output_dir: str = "",
-        adapter_name: str = "",
+        base_model: str = "",  # the only required argument
+        data_path: str = "yahma/alpaca-cleaned",
+        output_dir: str = "./lora-alpaca",
+        adapter_name: str = "lora",
         load_8bit : bool = False,
         # training hyperparams
         batch_size: int = 128,
@@ -45,7 +51,7 @@ def train(
         lora_target_modules: List[str] = None,
         # bottleneck adapter hyperparams
         bottleneck_size: int = 256,
-        non_linearity: str = "relu",
+        non_linearity: str = "tanh",
         adapter_dropout: float = 0.0,
         use_parallel_adapter: bool = False,
         use_adapterp: bool = False,
@@ -54,8 +60,14 @@ def train(
         # prefix tuning hyperparams
         num_virtual_tokens: int = 30,
         # llm hyperparams
-        train_on_inputs: bool = True,
-        group_by_length: bool = False,
+        train_on_inputs: bool = True,  # if False, masks out inputs in loss
+        group_by_length: bool = False,  # faster, but produces an odd training loss curve
+        # wandb params
+        wandb_project: str = "",
+        wandb_run_name: str = "",
+        wandb_watch: str = "",  # options: false | gradients | all
+        wandb_log_model: str = "",  # options: false | true
+        resume_from_checkpoint: str = None,  # either training checkpoint or final adapter
 ):
     print(
         f"Finetuning model with params:\n"
@@ -83,6 +95,10 @@ def train(
         f"adapter_name: {adapter_name}\n"
         f"target_modules: {target_modules}\n"
         f"group_by_length: {group_by_length}\n"
+        f"wandb_project: {wandb_project}\n"
+        f"wandb_run_name: {wandb_run_name}\n"
+        f"wandb_watch: {wandb_watch}\n"
+        f"wandb_log_model: {wandb_log_model}\n"
         f"resume_from_checkpoint: {resume_from_checkpoint}\n"
     )
     assert (
@@ -97,6 +113,18 @@ def train(
         device_map = {"": int(os.environ.get("LOCAL_RANK") or 0)}
         gradient_accumulation_steps = gradient_accumulation_steps // world_size
 
+    # Check if parameter passed or if set within environ
+    use_wandb = len(wandb_project) > 0 or (
+            "WANDB_PROJECT" in os.environ and len(os.environ["WANDB_PROJECT"]) > 0
+    )
+    # Only overwrite environ if wandb param passed
+    if len(wandb_project) > 0:
+        os.environ["WANDB_PROJECT"] = wandb_project
+    if len(wandb_watch) > 0:
+        os.environ["WANDB_WATCH"] = wandb_watch
+    if len(wandb_log_model) > 0:
+        os.environ["WANDB_LOG_MODEL"] = wandb_log_model
+
     if load_8bit:
         model = AutoModelForCausalLM.from_pretrained(
             base_model,
@@ -104,27 +132,30 @@ def train(
             torch_dtype=torch.float16,
             device_map=device_map,
             trust_remote_code=True,
-        )    
+        )
     else:
         model = AutoModelForCausalLM.from_pretrained(
             base_model,
-            load_in_8bit=False,
+            # load_in_8bit=False,
             torch_dtype=torch.float16,
             device_map={"": int(os.environ.get("LOCAL_RANK") or 0)},
+            trust_remote_code=True,
         )
 
     if model.config.model_type == "llama":
-        tokenizer = LlamaTokenizer.from_pretrained(base_model) #llama2
-        # tokenizer = AutoTokenizer.from_pretrained(base_model) #llama3
+        # Due to the name of transformers' LlamaTokenizer, we have to do this
+        tokenizer = LlamaTokenizer.from_pretrained(base_model)
     else:
-        tokenizer = AutoTokenizer.from_pretrained(base_model)
+        tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
 
     tokenizer.pad_token_id = (
-        0
+        0  # unk. we want this to be different from the eos token
     )
-    tokenizer.padding_side = "left"
+    tokenizer.padding_side = "left"  # Allow batched inference
 
     def tokenize(prompt, add_eos_token=True):
+        # there's probably a way to do this with the tokenizer settings
+        # but again, gotta move fast
         result = tokenizer(
             prompt,
             truncation=True,
@@ -160,7 +191,7 @@ def train(
                                                   -100
                                               ] * user_prompt_len + tokenized_full_prompt["labels"][
                                                                     user_prompt_len:
-                                                                    ]
+                                                                    ]  # could be sped up, probably
         return tokenized_full_prompt
 
     model = prepare_model_for_int8_training(model, use_gradient_checkpointing=use_gradient_checkpointing)
@@ -170,6 +201,15 @@ def train(
             lora_alpha=lora_alpha,
             target_modules=target_modules,
             lora_dropout=lora_dropout,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+    elif adapter_name == "peanut":
+        config = PeanutConfig(
+            r=lora_r,
+            lora_alpha=lora_alpha,
+            lora_dropout=lora_dropout,
+            target_modules=target_modules,
             bias="none",
             task_type="CAUSAL_LM",
         )
@@ -194,22 +234,24 @@ def train(
     if adapter_name == "prefix-tuning":
         model.to('cuda')
 
-    if data_path.endswith(".json"):
+    if data_path.endswith(".json"):  # todo: support jsonl
         data = load_dataset("json", data_files=data_path)
     else:
         data = load_dataset(data_path)
 
     if resume_from_checkpoint:
+        # Check the available weights and load them
         checkpoint_name = os.path.join(
             resume_from_checkpoint, "pytorch_model.bin"
-        )
+        )  # Full checkpoint
         if not os.path.exists(checkpoint_name):
             checkpoint_name = os.path.join(
                 resume_from_checkpoint, "adapter_model.bin"
-            )
+            )  # only LoRA model - LoRA config above has to fit
             resume_from_checkpoint = (
-                False
+                False  # So the trainer won't try loading its state
             )
+        # The two files above have a different name depending on how they were saved, but are actually the same.
         if os.path.exists(checkpoint_name):
             print(f"Restarting from {checkpoint_name}")
             adapters_weights = torch.load(checkpoint_name)
@@ -217,7 +259,7 @@ def train(
         else:
             print(f"Checkpoint {checkpoint_name} not found")
 
-    model.print_trainable_parameters()
+    model.print_trainable_parameters()  # Be more transparent about the % of trainable params.
 
     if val_set_size > 0:
         train_val = data["train"].train_test_split(
@@ -234,6 +276,7 @@ def train(
         val_data = None
 
     if not ddp and torch.cuda.device_count() > 1:
+        # keeps Trainer from trying its own DataParallelism when more than 1 gpu is available
         model.is_parallelizable = True
         model.model_parallel = True
 
@@ -250,7 +293,7 @@ def train(
             fp16=True,
             logging_steps=10,
             optim="adamw_torch",
-            evaluation_strategy="steps" if val_set_size > 0 else "no",
+            eval_strategy="steps" if val_set_size > 0 else "no",
             save_strategy="steps",
             eval_steps=eval_step if val_set_size > 0 else None,
             save_steps=save_step,
@@ -288,6 +331,7 @@ def train(
 
 
 def generate_prompt(data_point):
+    # sorry about the formatting disaster gotta move fast
     if data_point["input"]:
         return f"""Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request. 
 
